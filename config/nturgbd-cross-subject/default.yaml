@@ -9,7 +9,7 @@ train_feeder_args:
   random_choose: False
   random_shift: False
   random_move: True
-  window_size: 150
+  window_size: 64
   normalization: False
   random_rot: False
   p_interval: [0.5, 1.0]
@@ -19,7 +19,7 @@ train_feeder_args:
 test_feeder_args:
   data_path: data/ntu/NTU60_CS_binary_fall.npz
   split: test
-  window_size: 150
+  window_size: 64
   p_interval: [1.0, 1.0]
   vel: False
   bone: False
