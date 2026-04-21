@@ -535,8 +535,18 @@ class Processor():
 
 
             with torch.cuda.amp.autocast(enabled=use_amp):
+                num_class = (
+                    self.model.module.num_class
+                    if hasattr(self.model, "module")
+                    else self.model.num_class
+                )
 
-                output, z = self.model(data, F.one_hot(label, num_classes=self.model.module.num_class), joint)
+                output, z = self.model(
+                    data,
+                    F.one_hot(label, num_classes=num_class),
+                    joint
+                )
+                # output, z = self.model(data, F.one_hot(label, num_classes=self.model.module.num_class), joint)
                 # output, z = self.model(data, F.one_hot(label, num_classes=self.model.num_class), joint)
 
                 ## for mmd loss
