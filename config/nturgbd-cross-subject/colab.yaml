@@ -1,0 +1,53 @@
+work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/fall_cross_subject_biner
+
+# feeder
+feeder: feeders.feeder_ntu.Feeder
+train_feeder_args:
+  data_path: /content/drive/MyDrive/Fall-Detection/dataset/block_gcn_biner/NTU60_CS_binary_fall.npz
+  split: train
+  debug: False
+  random_choose: False
+  random_shift: False
+  random_move: True
+  window_size: 64
+  normalization: False
+  random_rot: False
+  p_interval: [0.5, 1.0]
+  vel: False
+  bone: False
+
+test_feeder_args:
+  data_path: /content/drive/MyDrive/Fall-Detection/dataset/block_gcn_biner/NTU60_CS_binary_fall.npz
+  split: test
+  window_size: 64
+  p_interval: [1.0, 1.0]
+  vel: False
+  bone: False
+  debug: False
+
+# model
+model: model.BlockGCN.Model
+model_args:
+  num_class: 2
+  num_point: 25
+  num_person: 2
+  graph: graph.ntu_rgb_d.Graph
+  window_size: 64
+  graph_args:
+    labeling_mode: "spatial"
+  joint_label:
+    [0, 4, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1, 2, 3, 3, 3, 2, 3, 3, 3, 1, 0, 1, 0, 1]
+
+#optim
+weight_decay: 0.0004
+base_lr: 0.01
+lr_decay_rate: 0.1
+step: [40, 60]
+warm_up_epoch: 5
+
+# training
+device: [0]
+batch_size: 8
+test_batch_size: 8
+num_epoch: 80
+nesterov: True
