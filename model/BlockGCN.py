@@ -337,7 +337,10 @@ class Topo(nn.Module):
         x = x.unsqueeze(-1) - x.unsqueeze(-2)
         x = x.mean(-3)
         x = self.L2_norm(x)
-        x = (x-torch.min(x))/(torch.max(x)-torch.min(x))
+        # tambah epsilon untuk hindari division by zero (NaN) saat max == min
+        x_min = torch.min(x)
+        x_max = torch.max(x)
+        x = (x - x_min) / (x_max - x_min + 1e-8)
         x = self.vr(x)
         x = make_tensor(x)
         self.pl = self.pl.cpu()
