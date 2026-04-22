@@ -631,7 +631,17 @@ class Processor():
                     data = data.float().cuda(self.output_device)
                     label = label.long().cuda(self.output_device)
                     # for mmd
-                    output, y = self.model(data, F.one_hot(label, num_classes=self.model.module.num_class), joint)
+                    num_class = (
+                        self.model.module.num_class
+                        if hasattr(self.model, "module")
+                        else self.model.num_class
+                    )
+
+                    output, y = self.model(
+                        data,
+                        F.one_hot(label, num_classes=num_class),
+                        joint
+                    )
                     # output, y = self.model(data, F.one_hot(label, num_classes=self.model.num_class))
 
 
