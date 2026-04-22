@@ -338,14 +338,16 @@ class Topo(nn.Module):
         x = x.mean(-3)
         x = self.L2_norm(x)
         x = (x-torch.min(x))/(torch.max(x)-torch.min(x))
+        # vr dan make_tensor selalu bekerja di CPU
+        # pindahkan x ke CPU dulu supaya konsisten
+        x = x.cpu()
         x = self.vr(x)
         x = make_tensor(x)
-        # make_tensor menghasilkan tensor di CPU
-        # pindahkan x DAN semua parameter self.pl ke device yang benar
-        x = x.to(device)
-        self.pl = self.pl.to(device)
+        # pastikan self.pl juga di CPU
+        self.pl = self.pl.cpu()
         x = self.pl(x)
-        return x
+        # kembalikan ke device semula (cuda)
+        return x.to(device)
 
 
 
