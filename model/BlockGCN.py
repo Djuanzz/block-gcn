@@ -340,10 +340,13 @@ class Topo(nn.Module):
         x = (x-torch.min(x))/(torch.max(x)-torch.min(x))
         x = self.vr(x)
         x = make_tensor(x)
-        # make_tensor menghasilkan tensor di CPU — pindahkan ke device yang benar
+        # make_tensor menghasilkan tensor di CPU
+        # pindahkan x DAN semua parameter self.pl ke device yang benar
         x = x.to(device)
+        self.pl = self.pl.to(device)
         x = self.pl(x)
         return x
+
 
 
 class Model(nn.Module):
