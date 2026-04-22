@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 from __future__ import print_function
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 import argparse
 import inspect
 import os
@@ -207,7 +209,7 @@ def get_parser():
     parser.add_argument(
         '--num-worker',
         type=int,
-        default=16,
+        default=4,
         help='the number of worker for data loader')
     parser.add_argument(
         '--train-feeder-args',
