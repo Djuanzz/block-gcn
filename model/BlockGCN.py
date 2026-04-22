@@ -332,22 +332,17 @@ class Topo(nn.Module):
         return weight_norm
    
     def forward(self, x):
-        device = x.device  # simpan device (cuda/cpu) dari input
+        x = x.cpu()
         x = x.mean(1)
         x = x.unsqueeze(-1) - x.unsqueeze(-2)
         x = x.mean(-3)
         x = self.L2_norm(x)
         x = (x-torch.min(x))/(torch.max(x)-torch.min(x))
-        # vr dan make_tensor selalu bekerja di CPU
-        # pindahkan x ke CPU dulu supaya konsisten
-        x = x.cpu()
         x = self.vr(x)
         x = make_tensor(x)
-        # pastikan self.pl juga di CPU
         self.pl = self.pl.cpu()
         x = self.pl(x)
-        # kembalikan ke device semula (cuda)
-        return x.to(device)
+        return x
 
 
 
@@ -403,8 +398,9 @@ class Model(nn.Module):
     def forward(self, x, y, joint):
         N, C, T, V, M = x.size()
         N, C, T, V, M = joint.size()
+        device = x.device
         a = rearrange(joint, 'n c t v m -> n m c t v', m=M, v=V).contiguous()
-        a = self.topo(a)
+        a = self.topo(a).to(device)
         x = rearrange(x, 'n c t v m -> (n m t) v c', m=M, v=V).contiguous()
 
         x = self.to_joint_embedding(x)
