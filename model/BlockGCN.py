@@ -332,6 +332,7 @@ class Topo(nn.Module):
         return weight_norm
    
     def forward(self, x):
+        device = x.device  # simpan device (cuda/cpu) dari input
         x = x.mean(1)
         x = x.unsqueeze(-1) - x.unsqueeze(-2)
         x = x.mean(-3)
@@ -339,9 +340,10 @@ class Topo(nn.Module):
         x = (x-torch.min(x))/(torch.max(x)-torch.min(x))
         x = self.vr(x)
         x = make_tensor(x)
+        # make_tensor menghasilkan tensor di CPU — pindahkan ke device yang benar
+        x = x.to(device)
         x = self.pl(x)
         return x
-
 
 
 class Model(nn.Module):
