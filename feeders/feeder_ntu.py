@@ -79,9 +79,9 @@ class Feeder(Dataset):
         valid_frame_num = np.sum(data_numpy.sum(0).sum(-1).sum(-1) != 0)
         # reshape Tx(MVC) to CTVM
         data_numpy = tools.valid_crop_resize(data_numpy, valid_frame_num, self.p_interval, self.window_size)
-        if self.random_move:
+        if self.random_move and valid_frame_num > 0:
             data_numpy = tools.random_move(data_numpy)
-        joint = data_numpy
+        joint = data_numpy.copy()
         if self.random_rot:
             data_numpy = tools.random_rot(data_numpy)
             joint = data_numpy
