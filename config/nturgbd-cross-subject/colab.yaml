@@ -1,4 +1,4 @@
-work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/fall_cross_subject_full
+work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/fall_cross_subject_biner
 
 # feeder
 feeder: feeders.feeder_ntu.Feeder
