@@ -529,6 +529,8 @@ class Processor():
             # backward
             self.optimizer.zero_grad()
             scaler.scale(loss).backward()
+            scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             scaler.step(self.optimizer)
             scaler.update()
 
