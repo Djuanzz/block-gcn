@@ -12,7 +12,8 @@ import sys
 import time
 from collections import OrderedDict
 import traceback
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import (confusion_matrix, classification_report,
+                              balanced_accuracy_score, roc_auc_score)
 import csv
 import numpy as np
 import glob
@@ -29,7 +30,6 @@ from tqdm import tqdm
 import copy
 from torch import linalg as LA
 
-sys.path.insert(0, "~/anaconda3/envs/diffusion/lib/python3.8/site-packages/click")
 
 "https://github.com/ajbrock/BigGAN-PyTorch/blob/master/utils.py"
 
@@ -354,7 +354,6 @@ class Processor():
                 batch_size=self.arg.batch_size,
                 shuffle=True,
                 pin_memory=True,
-                prefetch_factor=16,
                 num_workers=self.arg.num_worker,
                 drop_last=True,
                 worker_init_fn=init_seed)
@@ -456,7 +455,7 @@ class Processor():
             yaml.dump(arg_dict, f)
 
     def adjust_learning_rate(self, epoch):
-        if self.arg.optimizer == 'SGD' or self.arg.optimizer == 'Adam' or self.arg.optimizer == 'NAdam':
+        if self.arg.optimizer in ('SGD', 'Adam', 'NAdam', 'AdamW'):
             if epoch < self.arg.warm_up_epoch:
                 lr = self.arg.base_lr * (epoch + 1) / self.arg.warm_up_epoch
             else:
@@ -499,7 +498,6 @@ class Processor():
         self.adjust_learning_rate(epoch)
 
         loss_value = []
-        loss_value2 = []
         acc_value = []
         self.train_writer.add_scalar('epoch', epoch, self.global_step)
         self.record_time()
@@ -509,9 +507,10 @@ class Processor():
         # mix_precision is slower for this model!!!
         use_amp = True
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-        # torch.autograd.set_detect_anomaly(True)
 
-        soft_label_emma = 0
+        num_class = (self.model.module.num_class
+                     if hasattr(self.model, "module") else self.model.num_class)
+
         for batch_idx, (joint, data, label, index) in enumerate(process):
             self.global_step += 1
             with torch.no_grad():
@@ -519,54 +518,13 @@ class Processor():
                 label = label.long().cuda(self.output_device)
             timer['dataloader'] += self.split_time()
 
-            # print(data[0,:,0,:,0])
-
-            # with autograd.detect_anomaly():
-            # forward
-
-            class SoftTargetCrossEntropy(nn.Module):
-
-                def __init__(self):
-                    super(SoftTargetCrossEntropy, self).__init__()
-
-                def forward(self, x, target):
-                    # because p has already been passed through softmax !
-                    # cross entropy is non-symetric!! the order matters!!!
-                    loss = -torch.sum(target * torch.log(x+1e-20), dim=-1)
-                    return loss.mean()
-
-
             with torch.cuda.amp.autocast(enabled=use_amp):
-                num_class = (
-                    self.model.module.num_class
-                    if hasattr(self.model, "module")
-                    else self.model.num_class
-                )
-
                 output, z = self.model(
                     data,
                     F.one_hot(label, num_classes=num_class),
                     joint
                 )
-                # output, z = self.model(data, F.one_hot(label, num_classes=self.model.module.num_class), joint)
-                # output, z = self.model(data, F.one_hot(label, num_classes=self.model.num_class), joint)
-
-                ## for mmd loss
-                # output, y, z = self.model(data, F.one_hot(label, num_classes=self.model.module.num_class))
-                # mmd_loss, l2_z_mean, z_mean = get_mmd_loss(z, self.model.module.z_prior, label, self.model.module.num_class)
-
                 loss = self.loss(output, label)
-            loss2 = torch.zeros_like(loss).cuda(loss.device)
-
-
-
-            loss += loss2
-
-
-            # # for mmd loss
-            # lamb1, lamb2 = 1e-4, 1e-1
-            # loss += lamb2 * mmd_loss + lamb1 * l2_z_mean
-
 
             # backward
             self.optimizer.zero_grad()
@@ -575,7 +533,6 @@ class Processor():
             scaler.update()
 
             loss_value.append(loss.data.item())
-            loss_value2.append(loss2.data.item())
             timer['model'] += self.split_time()
 
             value, predict_label = torch.max(output.data, 1)
@@ -583,8 +540,6 @@ class Processor():
             acc_value.append(acc.data.item())
             self.train_writer.add_scalar('acc', acc, self.global_step)
             self.train_writer.add_scalar('loss', loss.data.item(), self.global_step)
-            self.train_writer.add_scalar('loss2', loss2.data.item(), self.global_step)
-            # statistics
             self.lr = self.optimizer.param_groups[0]['lr']
             self.train_writer.add_scalar('lr', self.lr, self.global_step)
             timer['statistics'] += self.split_time()
@@ -595,7 +550,8 @@ class Processor():
             for k, v in timer.items()
         }
         self.print_log(
-            '\tMean training loss: {:.4f}. loss2: {:.4f}. Mean training acc: {:.2f}%.'.format(np.mean(loss_value), np.mean(loss_value2), np.mean(acc_value)*100))
+            '\tMean training loss: {:.4f}.  Mean training acc: {:.2f}%.'.format(
+                np.mean(loss_value), np.mean(acc_value) * 100))
         self.print_log('\tTime consumption: [Data]{dataloader}, [Network]{model}'.format(**proportion))
 
         if save_model:
@@ -624,50 +580,45 @@ class Processor():
             label_list_ema = []
             pred_list_ema = []
             step = 0
+            num_class = (self.model.module.num_class
+                         if hasattr(self.model, "module") else self.model.num_class)
             process = tqdm(self.data_loader[ln], ncols=40)
             for batch_idx, (joint, data, label, index) in enumerate(process):
                 label_list.append(label)
-                if arg.ema:
+                if self.arg.ema:
                     label_list_ema.append(label)
                 with torch.no_grad():
                     data = data.float().cuda(self.output_device)
                     label = label.long().cuda(self.output_device)
-                    # for mmd
-                    num_class = (
-                        self.model.module.num_class
-                        if hasattr(self.model, "module")
-                        else self.model.num_class
-                    )
 
                     output, y = self.model(
                         data,
                         F.one_hot(label, num_classes=num_class),
                         joint
                     )
-                    # output, y = self.model(data, F.one_hot(label, num_classes=self.model.num_class))
 
 
 
-                    if arg.ema:
+                    if self.arg.ema:
                         self.model_ema.cuda(self.output_device)
                         output_ema, z_ema = self.model_ema(data, F.one_hot(label, num_classes=self.model.module.num_class))
                         # output_ema, z_ema = self.model_ema(data,
                         #                                    F.one_hot(label, num_classes=self.model.num_class))
                     loss = self.loss(output, label)
-                    if arg.ema:
+                    if self.arg.ema:
                         loss_ema = self.loss(output_ema, label)
 
                     score_frag.append(output.data.cpu().numpy())
                     loss_value.append(loss.data.item())
 
-                    if arg.ema:
+                    if self.arg.ema:
                         score_frag_ema.append(output_ema.data.cpu().numpy())
                         loss_value_ema.append(loss_ema.data.item())
 
                     _, predict_label = torch.max(output.data, 1)
                     pred_list.append(predict_label.data.cpu().numpy())
 
-                    if arg.ema:
+                    if self.arg.ema:
                         _, predict_label_ema = torch.max(output_ema.data, 1)
                         pred_list_ema.append(predict_label_ema.data.cpu().numpy())
 
@@ -711,7 +662,7 @@ class Processor():
             if self.arg.phase == 'train':
                 self.val_writer.add_scalar('loss', loss, self.global_step)
                 self.val_writer.add_scalar('acc', accuracy, self.global_step)
-                if arg.ema:
+                if self.arg.ema:
                     self.val_writer.add_scalar('loss_ema', loss_ema, self.global_step)
                     self.val_writer.add_scalar('acc_ema', accuracy_ema, self.global_step)
 
@@ -728,7 +679,7 @@ class Processor():
             for k in self.arg.show_topk:
                 self.print_log('\tTop{}: {:.2f}%'.format(
                     k, 100 * self.data_loader[ln].dataset.top_k(score, k)))
-            if arg.ema:
+            if self.arg.ema:
                 for k in self.arg.show_topk:
                     self.print_log('\tTop{}_ema: {:.2f}%'.format(
                         k, 100 * self.data_loader[ln].dataset.top_k(score_ema, k)))
@@ -738,7 +689,7 @@ class Processor():
                         self.arg.work_dir, epoch + 1, ln), 'wb') as f:
                     pickle.dump(score_dict, f)
 
-            if arg.ema:
+            if self.arg.ema:
                 if save_score:
                     with open('{}/epoch{}_{}_score_ema.pkl'.format(
                             self.arg.work_dir, epoch + 1, ln), 'wb') as f:
@@ -756,7 +707,48 @@ class Processor():
                 writer.writerow(each_acc)
                 writer.writerows(confusion)
 
-            if arg.ema:
+            # ---- Comprehensive classification metrics ----
+            label_names = (['non-fall', 'fall'] if num_class == 2
+                           else [str(i) for i in range(num_class)])
+            report = classification_report(
+                label_list, pred_list, target_names=label_names, zero_division=0)
+            self.print_log('\n  Classification Report ({}):\n{}'.format(ln, report))
+
+            bal_acc = balanced_accuracy_score(label_list, pred_list)
+            self.print_log('\tBalanced Accuracy: {:.2f}%'.format(bal_acc * 100))
+
+            if num_class == 2 and confusion.shape == (2, 2):
+                tn, fp, fn, tp = confusion.ravel()
+                sensitivity = tp / (tp + fn + 1e-8)
+                specificity = tn / (tn + fp + 1e-8)
+                self.print_log('\tSensitivity (Fall Recall)    : {:.2f}%'.format(sensitivity * 100))
+                self.print_log('\tSpecificity (Non-Fall Recall): {:.2f}%'.format(specificity * 100))
+                self.print_log('\tTP={:4d}  TN={:4d}  FP={:4d}  FN={:4d}'.format(
+                    int(tp), int(tn), int(fp), int(fn)))
+                auc = float('nan')
+                try:
+                    score_proba = F.softmax(
+                        torch.from_numpy(score.astype(np.float32)), dim=1).numpy()
+                    auc = roc_auc_score(label_list, score_proba[:, 1])
+                    self.print_log('\tAUC-ROC: {:.4f}'.format(auc))
+                except Exception as e:
+                    self.print_log('\tAUC-ROC: N/A ({})'.format(e))
+                with open('{}/epoch{}_{}_binary_metrics.csv'.format(
+                        self.arg.work_dir, epoch + 1, ln), 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['metric', 'value'])
+                    writer.writerow(['accuracy', '{:.4f}'.format(accuracy)])
+                    writer.writerow(['balanced_accuracy', '{:.4f}'.format(bal_acc)])
+                    writer.writerow(['sensitivity', '{:.4f}'.format(sensitivity)])
+                    writer.writerow(['specificity', '{:.4f}'.format(specificity)])
+                    writer.writerow(['auc_roc', '{:.4f}'.format(auc)])
+                    writer.writerow(['tp', int(tp)])
+                    writer.writerow(['tn', int(tn)])
+                    writer.writerow(['fp', int(fp)])
+                    writer.writerow(['fn', int(fn)])
+            # ---- End comprehensive metrics ----
+
+            if self.arg.ema:
                 # acc for each class:
                 label_list_ema = np.concatenate(label_list_ema)
                 pred_list_ema = np.concatenate(pred_list_ema)
@@ -787,7 +779,7 @@ class Processor():
                 self.eval(epoch, save_score=self.arg.save_score, loader_name=['test'])
 
             # test the best model
-            weights_path = glob.glob(os.path.join(self.arg.work_dir, 'runs-'+str(self.best_acc_epoch)+'*'))[0]
+            weights_path = glob.glob(os.path.join(self.arg.work_dir, 'runs-'+str(self.best_acc_epoch)+'-*'))[0]
             weights = torch.load(weights_path)
             if type(self.arg.device) is list:
                 if len(self.arg.device) > 1:
@@ -796,20 +788,22 @@ class Processor():
 
             wf = weights_path.replace('.pt', '_wrong.txt')
             rf = weights_path.replace('.pt', '_right.txt')
-            self.arg.print_log = False
+            self.print_log('\n' + '='*60)
+            self.print_log('Final evaluation on best model (epoch {})'.format(self.best_acc_epoch))
+            self.print_log('='*60)
             self.eval(epoch=0, save_score=True, loader_name=['test'], wrong_file=wf, result_file=rf)
-            self.arg.print_log = True
-
 
             num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            self.print_log(f'Best accuracy: {self.best_acc}')
-            self.print_log(f'Epoch number: {self.best_acc_epoch}')
-            self.print_log(f'Model name: {self.arg.work_dir}')
-            self.print_log(f'Model total number of params: {num_params}')
-            self.print_log(f'Weight decay: {self.arg.weight_decay}')
-            self.print_log(f'Base LR: {self.arg.base_lr}')
-            self.print_log(f'Batch Size: {self.arg.batch_size}')
-            self.print_log(f'Test Batch Size: {self.arg.test_batch_size}')
+            self.print_log('\n' + '='*60)
+            self.print_log('Training complete. Summary:')
+            self.print_log('  Best accuracy     : {:.2f}%'.format(self.best_acc * 100))
+            self.print_log('  Best epoch        : {}'.format(self.best_acc_epoch))
+            self.print_log('  Model dir         : {}'.format(self.arg.work_dir))
+            self.print_log('  Trainable params  : {:,}'.format(num_params))
+            self.print_log('  Weight decay      : {}'.format(self.arg.weight_decay))
+            self.print_log('  Base LR           : {}'.format(self.arg.base_lr))
+            self.print_log('  Batch size        : {}'.format(self.arg.batch_size))
+            self.print_log('  Test batch size   : {}'.format(self.arg.test_batch_size))
             self.print_log(f'seed: {self.arg.seed}')
 
         elif self.arg.phase == 'test':
