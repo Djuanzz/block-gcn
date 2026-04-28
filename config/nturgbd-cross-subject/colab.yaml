@@ -3,7 +3,7 @@ work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/fall_cross_subject_full
 # feeder
 feeder: feeders.feeder_ntu.Feeder
 train_feeder_args:
-  data_path: /content/drive/MyDrive/Fall-Detection/dataset/block_gcn_full/NTU60_CS.npz
+  data_path: /content/drive/MyDrive/Fall-Detection/dataset/block_gcn_biner/NTU60_CS_binary_fall.npz
   split: train
   debug: False
   random_choose: False
@@ -17,7 +17,7 @@ train_feeder_args:
   bone: False
 
 test_feeder_args:
-  data_path: /content/drive/MyDrive/Fall-Detection/dataset/block_gcn_full/NTU60_CS.npz
+  data_path: /content/drive/MyDrive/Fall-Detection/dataset/block_gcn_biner/NTU60_CS_binary_fall.npz
   split: test
   window_size: 64
   p_interval: [1.0, 1.0]
