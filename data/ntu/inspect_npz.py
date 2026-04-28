@@ -1,21 +1,27 @@
 """
 inspect_npz.py
 ==============
-Script untuk melihat isi file .npz hasil seq_transformation.py (BlockGCN/NTU60).
-Taruh di folder mana saja, sesuaikan path NPZ_FILE di bawah.
+Script untuk memeriksa isi dan kualitas file .npz dataset fall detection.
 
-Jalankan:
+Jalankan (dari folder data/ntu/):
     python inspect_npz.py
+    python inspect_npz.py NTU60_CS.npz          # periksa file tertentu
+
+File yang dihasilkan prepare_fall_dataset.py:
+    NTU60_CS_binary_fall.npz  —  2 kelas: 0=non-fall, 1=fall
 """
 
+import sys
 import numpy as np
 import os
 
 # =============================================================
-#  EDIT INI — path ke file .npz yang ingin dilihat
+#  Path default (bisa di-override lewat argumen command line)
 # =============================================================
-NPZ_FILE = "./NTU60_CS_filtered_5class.npz"
+NPZ_FILE = sys.argv[1] if len(sys.argv) > 1 else "./NTU60_CS_binary_fall.npz"
 # =============================================================
+
+BINARY_LABEL_NAMES = {0: "non-fall", 1: "fall"}
 
 NTU60_CLASSES = {
     1:"drink water", 2:"eat meal/snack", 3:"brushing teeth",
@@ -103,6 +109,13 @@ def inspect(npz_path):
     # ------------------------------------------------------------------
     # 3. Distribusi label per class
     # ------------------------------------------------------------------
+    # Deteksi apakah ini file binary (2 kelas) untuk tampilan khusus
+    is_binary = False
+    if 'y_train' in npz.files:
+        y_tmp = npz['y_train']
+        n_cls = y_tmp.shape[1] if y_tmp.ndim == 2 else int(y_tmp.max()) + 1
+        is_binary = (n_cls == 2)
+
     for split, lbl_key, data_key in [("TRAIN", "y_train", "x_train"),
                                       ("TEST",  "y_test",  "x_test")]:
         if lbl_key not in npz.files:
@@ -116,7 +129,7 @@ def inspect(npz_path):
 
         # Deteksi format label: one-hot (2D) atau integer (1D)
         if y.ndim == 2:
-            labels_int = np.argmax(y, axis=1)   # one-hot → integer 0-based
+            labels_int = np.argmax(y, axis=1)
             fmt = "one-hot"
         else:
             labels_int = y.astype(int)
@@ -129,48 +142,67 @@ def inspect(npz_path):
         print(f"  Total sample  : {total_samples}")
         print(f"  Jumlah class  : {num_classes_in_file}")
         print()
-        print(f"  {'No':<5} {'Class (1-based)':<20} {'Nama Action':<38} {'Jumlah':>7}")
-        sep("-")
 
         unique, counts = np.unique(labels_int, return_counts=True)
-        for cls_0based, count in zip(unique, counts):
-            cls_1based = int(cls_0based) + 1
-            name = NTU60_CLASSES.get(cls_1based, f"(class {cls_1based})")
-            pct = count / total_samples * 100
-            bar = "█" * int(pct / 2)
-            print(f"  {cls_0based:<5} A{cls_1based:03d}                "
-                  f"{name:<38} {count:>5}  ({pct:4.1f}%) {bar}")
+
+        if is_binary:
+            # Tampilan khusus binary fall detection
+            print(f"  {'Label':<8} {'Nama':<12} {'Jumlah':>8}  {'%':>6}  Bar")
+            sep("-")
+            for cls_0based, count in zip(unique, counts):
+                name = BINARY_LABEL_NAMES.get(int(cls_0based), f"class_{cls_0based}")
+                pct  = count / total_samples * 100
+                bar  = "��" * int(pct / 2)
+                print(f"  {cls_0based:<8} {name:<12} {count:>8}  {pct:>5.1f}%  {bar}")
+            # Rasio imbalance
+            if len(counts) == 2:
+                ratio = counts[0] / counts[1] if counts[1] > 0 else float('inf')
+                print(f"\n  Rasio non-fall/fall: {ratio:.1f} : 1"
+                      f"  ({'imbalanced' if ratio > 3 else 'relatif seimbang'})")
+        else:
+            # Tampilan umum multi-class
+            print(f"  {'No':<5} {'Class (1-based)':<20} {'Nama Action':<38} {'Jumlah':>7}")
+            sep("-")
+            for cls_0based, count in zip(unique, counts):
+                cls_1based = int(cls_0based) + 1
+                name = NTU60_CLASSES.get(cls_1based, f"(class {cls_1based})")
+                pct  = count / total_samples * 100
+                bar  = "█" * int(pct / 2)
+                print(f"  {cls_0based:<5} A{cls_1based:03d}                "
+                      f"{name:<38} {count:>5}  ({pct:4.1f}%) {bar}")
 
     # ------------------------------------------------------------------
-    # 4. Contoh sample pertama
+    # 4. Cek kualitas data + preview
     # ------------------------------------------------------------------
     if 'x_train' in npz.files and 'y_train' in npz.files:
-        x = npz['x_train']
-        y = npz['y_train']
+        x_all      = npz['x_train']
+        y          = npz['y_train']
         labels_int = np.argmax(y, axis=1) if y.ndim == 2 else y.astype(int)
 
         print()
         sep()
-        print("  PREVIEW — 5 SAMPLE PERTAMA (x_train)")
+        print("  KUALITAS DATA x_train")
         sep()
-        print(f"  {'Idx':<6} {'Label (0-based)':<18} {'Class NTU (A-xxx)':<22} {'Nama Action'}")
-        sep("-")
-        for i in range(min(5, len(labels_int))):
-            lbl = int(labels_int[i])
-            cls_1based = lbl + 1
-            name = NTU60_CLASSES.get(cls_1based, "Unknown")
-            print(f"  {i:<6} {lbl:<18} A{cls_1based:03d}                   {name}")
-
-        # Cek apakah ada nilai NaN atau Inf
-        print()
-        x_all = npz['x_train']
-        nan_count = np.isnan(x_all).sum()
-        inf_count = np.isinf(x_all).sum()
-        print(f"  Cek kualitas data x_train:")
-        print(f"    NaN values : {nan_count}")
-        print(f"    Inf values : {inf_count}")
+        nan_count = int(np.isnan(x_all).sum())
+        inf_count = int(np.isinf(x_all).sum())
+        zero_seq  = int((x_all.reshape(len(x_all), -1).sum(axis=1) == 0).sum())
+        print(f"  NaN values    : {nan_count}")
+        print(f"  Inf values    : {inf_count}")
+        print(f"  Sequence nol  : {zero_seq}")
         if nan_count == 0 and inf_count == 0:
-            print(f"    ✓ Data bersih, tidak ada NaN/Inf")
+            print(f"  ✓ Data bersih, tidak ada NaN/Inf")
+
+        if is_binary:
+            print()
+            sep()
+            print("  PREVIEW — 5 SAMPLE x_train")
+            sep()
+            print(f"  {'Idx':<6} {'Label':<8} {'Kelas'}")
+            sep("-")
+            for i in range(min(5, len(labels_int))):
+                lbl  = int(labels_int[i])
+                name = BINARY_LABEL_NAMES.get(lbl, f"class_{lbl}")
+                print(f"  {i:<6} {lbl:<8} {name}")
 
     print()
     sep()
