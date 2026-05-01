@@ -1,4 +1,4 @@
-work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/fall_cross_subject_biner
+work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/blockgcn_biner
 
 # feeder
 feeder: feeders.feeder_ntu.Feeder
