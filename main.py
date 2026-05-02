@@ -72,12 +72,27 @@ def ema_update(source, target, decay=0.99, start_itr=20, itr=None):
     # peg the ema weights to the underlying weights.
     if itr and itr<start_itr:
         decay = 0.0
-    # source = copy.deepcopy(source)
     with torch.no_grad():
-        # for key, value in source.module.state_dict().items():
         for key, value in source.state_dict().items():
             target.state_dict()[key].copy_(target.state_dict()[key] * decay + value * (1 - decay))
-            # print(key)
+
+
+def build_loss(loss_name: str, loss_args: dict) -> nn.Module:
+    args = dict(loss_args) if loss_args else {}
+    if 'weight' in args:
+        w = args['weight']
+        if w is not None and not isinstance(w, torch.Tensor):
+            args['weight'] = torch.tensor(w, dtype=torch.float32)
+        elif w is None:
+            del args['weight']
+    LossClass = getattr(nn, loss_name, None)
+    if LossClass is None:
+        raise ValueError("Loss '{}' tidak ditemukan di torch.nn".format(loss_name))
+    return LossClass(**args)
+
+
+def move_loss_to_device(loss: nn.Module, device) -> nn.Module:
+    return loss.to(device)
 
 
 try:
@@ -126,31 +141,19 @@ def get_mmd_loss(z, z_prior, y, num_cls):
 
 
 def get_parser():
-
-
     # parameter priority: command line > config > default
-    parser = argparse.ArgumentParser(
-        description='GRA Transformer')
+    parser = argparse.ArgumentParser(description='GRA Transformer')
 
-    parser.add_argument(
-        '--work-dir',
-        default='./work_dir/temp',
-        help='the work folder for storing results')
+    parser.add_argument('--work-dir', default='./work_dir/temp',
+                        help='the work folder for storing results')
 
     parser.add_argument('-model_saved_name', default='')
-    parser.add_argument(
-        '--config',
-        default='./config/nturgbd-cross-view/test_bone.yaml',
-        help='path to the configuration file')
+    parser.add_argument('--config', default='./config/nturgbd-cross-view/test_bone.yaml',
+                        help='path to the configuration file')
 
     # processor
-    parser.add_argument(
-        '--phase', default='train', help='must be train or test')
-    parser.add_argument(
-        '--save-score',
-        type=str2bool,
-        default=True,
-        help='if ture, the classification score will be stored')
+    parser.add_argument('--phase', default='train', help='must be train or test')
+    parser.add_argument('--save-score', type=str2bool, default=True, help='if ture, the classification score will be stored')
 
     # gra
     parser.add_argument(
@@ -293,6 +296,10 @@ def get_parser():
         default=False,
         help='gunakan WeightedRandomSampler untuk menangani class imbalance')
 
+    # loss
+    parser.add_argument('--loss', default='CrossEntropyLoss')
+    parser.add_argument('--loss-args', action=DictAction, default=dict())
+
     return parser
 
 
@@ -332,11 +339,15 @@ class Processor():
         self.lr = self.arg.base_lr
         self.best_acc = 0
         self.best_acc_epoch = 0
+        self.best_f1 = 0.0
+        self.best_f1_epoch = 0
 
         self.best_acc_ema = 0
         self.best_acc_epoch_ema = 0
 
+        self.use_cuda = torch.cuda.is_available()
         self.model = self.model.cuda(self.output_device)
+        self.loss = move_loss_to_device(self.loss, self.output_device)
 
         if type(self.arg.device) is list:
             if len(self.arg.device) > 1:
@@ -344,6 +355,7 @@ class Processor():
                     self.model,
                     device_ids=self.arg.device,
                     output_device=self.output_device)
+                self.loss = move_loss_to_device(self.loss, self.output_device)
         if self.arg.ema:
             Model = import_class(self.arg.model)
             self.model_ema = Model(**self.arg.model_args).cuda(self.output_device)
@@ -383,7 +395,10 @@ class Processor():
         print(Model)
         self.model = Model(**self.arg.model_args)
         print(self.model)
-        self.loss = nn.CrossEntropyLoss()
+        self.loss = build_loss(
+            getattr(self.arg, 'loss', 'CrossEntropyLoss'),
+            getattr(self.arg, 'loss_args', {})
+        )
 
         if self.arg.weights:
             self.global_step = int(self.arg.weights[:-3].split('-')[-1])
@@ -514,9 +529,9 @@ class Processor():
         timer = dict(dataloader=0.001, model=0.001, statistics=0.001)
         process = tqdm(loader, ncols=40)
 
-        # mix_precision is slower for this model!!!
-        use_amp = True
-        scaler = torch.cuda.amp.GradScaler(init_scale=256, enabled=use_amp)
+        use_amp = self.use_cuda
+        amp_device = 'cuda' if self.use_cuda else 'cpu'
+        scaler = torch.amp.GradScaler(amp_device, init_scale=256, enabled=use_amp)
 
         num_class = (self.model.module.num_class
                      if hasattr(self.model, "module") else self.model.num_class)
@@ -524,11 +539,11 @@ class Processor():
         for batch_idx, (data, label) in enumerate(process):
             self.global_step += 1
             with torch.no_grad():
-                data = data.float().cuda(self.output_device)
-                label = label.long().cuda(self.output_device)
+                data = data.float().to(self.output_device)
+                label = label.long().to(self.output_device)
             timer['dataloader'] += self.split_time()
 
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast(amp_device, enabled=use_amp):
                 output = self.model(data)
                 loss = self.loss(output, label)
 
@@ -577,6 +592,7 @@ class Processor():
         if self.arg.ema:
             self.model_ema.eval()
         self.print_log('Eval epoch: {}'.format(epoch + 1))
+        best_f1_this_eval = 0.0
         for ln in loader_name:
             loss_value = []
             score_frag = []
@@ -596,8 +612,8 @@ class Processor():
                 if self.arg.ema:
                     label_list_ema.append(label)
                 with torch.no_grad():
-                    data = data.float().cuda(self.output_device)
-                    label = label.long().cuda(self.output_device)
+                    data = data.float().to(self.output_device)
+                    label = label.long().to(self.output_device)
 
                     output = self.model(data)
 
@@ -631,7 +647,8 @@ class Processor():
                         if result_file is not None:
                             f_r.write(str(x) + ',' + str(true[i]) + '\n')
                         if x != true[i] and wrong_file is not None:
-                            f_w.write(str(index[i]) + ',' + str(x) + ',' + str(true[i]) + '\n')
+                            sample_idx = batch_idx * len(true) + i
+                            f_w.write(str(sample_idx) + ',' + str(x) + ',' + str(true[i]) + '\n')
 
             score = np.concatenate(score_frag)
             loss = np.mean(loss_value)
@@ -719,12 +736,17 @@ class Processor():
 
             if num_class == 2 and confusion.shape == (2, 2):
                 tn, fp, fn, tp = confusion.ravel()
-                sensitivity = tp / (tp + fn + 1e-8)
-                specificity = tn / (tn + fp + 1e-8)
-                self.print_log('\tSensitivity (Fall Recall)    : {:.2f}%'.format(sensitivity * 100))
-                self.print_log('\tSpecificity (Non-Fall Recall): {:.2f}%'.format(specificity * 100))
+                prec = tp / max(tp + fp, 1)
+                rec  = tp / max(tp + fn, 1)
+                spec = tn / max(tn + fp, 1)
+                f1   = 2 * prec * rec / max(prec + rec, 1e-9)
+                best_f1_this_eval = max(best_f1_this_eval, f1)
+
+                self.print_log('\tSensitivity (Fall Recall)    : {:.2f}%'.format(rec  * 100))
+                self.print_log('\tSpecificity (Non-Fall Recall): {:.2f}%'.format(spec * 100))
                 self.print_log('\tTP={:4d}  TN={:4d}  FP={:4d}  FN={:4d}'.format(
                     int(tp), int(tn), int(fp), int(fn)))
+
                 auc = float('nan')
                 try:
                     score_proba = F.softmax(
@@ -733,15 +755,25 @@ class Processor():
                     self.print_log('\tAUC-ROC: {:.4f}'.format(auc))
                 except Exception as e:
                     self.print_log('\tAUC-ROC: N/A ({})'.format(e))
+
+                if self.arg.phase == 'train':
+                    self.val_writer.add_scalar('precision',    prec,    self.global_step)
+                    self.val_writer.add_scalar('recall',       rec,     self.global_step)
+                    self.val_writer.add_scalar('f1',           f1,      self.global_step)
+                    self.val_writer.add_scalar('balanced_acc', bal_acc, self.global_step)
+                    self.val_writer.add_scalar('auc_roc',      auc,     self.global_step)
+
                 with open('{}/epoch{}_{}_binary_metrics.csv'.format(
                         self.arg.work_dir, epoch + 1, ln), 'w', newline='') as f:
                     writer = csv.writer(f)
                     writer.writerow(['metric', 'value'])
-                    writer.writerow(['accuracy', '{:.4f}'.format(accuracy)])
+                    writer.writerow(['accuracy',          '{:.4f}'.format(accuracy)])
                     writer.writerow(['balanced_accuracy', '{:.4f}'.format(bal_acc)])
-                    writer.writerow(['sensitivity', '{:.4f}'.format(sensitivity)])
-                    writer.writerow(['specificity', '{:.4f}'.format(specificity)])
-                    writer.writerow(['auc_roc', '{:.4f}'.format(auc)])
+                    writer.writerow(['precision',         '{:.4f}'.format(prec)])
+                    writer.writerow(['sensitivity',       '{:.4f}'.format(rec)])
+                    writer.writerow(['specificity',       '{:.4f}'.format(spec)])
+                    writer.writerow(['f1',                '{:.4f}'.format(f1)])
+                    writer.writerow(['auc_roc',           '{:.4f}'.format(auc)])
                     writer.writerow(['tp', int(tp)])
                     writer.writerow(['tn', int(tn)])
                     writer.writerow(['fp', int(fp)])
@@ -761,6 +793,12 @@ class Processor():
                     writer.writerow(each_acc_ema)
                     writer.writerows(confusion_ema)
 
+        if wrong_file is not None and f_w is not None:
+            f_w.close()
+        if result_file is not None and f_r is not None:
+            f_r.close()
+        return best_f1_this_eval
+
     def start(self):
         if self.arg.phase == 'train':
             self.print_log('Parameters:\n{}\n'.format(str(vars(self.arg))))
@@ -772,55 +810,69 @@ class Processor():
                 save_model = (((epoch + 1) % self.arg.save_interval == 0) or (
                         epoch + 1 == self.arg.num_epoch)) and (epoch+1) > self.arg.save_epoch
 
-                # self.lr_scheduler.step(epoch)
                 self.train(epoch, save_model=save_model)
                 if self.arg.ema:
                     ema_update(self.model, self.model_ema, itr=epoch)
-                self.eval(epoch, save_score=self.arg.save_score, loader_name=['test'])
+                epoch_f1 = self.eval(epoch, save_score=self.arg.save_score, loader_name=['test'])
+                if epoch_f1 > self.best_f1:
+                    self.best_f1       = epoch_f1
+                    self.best_f1_epoch = epoch + 1
+
+                # Selalu simpan kalau ini best accuracy baru
+                if self.best_acc_epoch == (epoch + 1) and not save_model:
+                    state_dict = self.model.state_dict()
+                    weights = OrderedDict([
+                        [k.split('module.')[-1], v.cpu()]
+                        for k, v in state_dict.items()
+                    ])
+                    torch.save(weights,
+                               self.arg.model_saved_name + '-' + str(epoch + 1) +
+                               '-' + str(int(self.global_step)) + '.pt')
 
             # test the best model
-            weights_path = glob.glob(os.path.join(self.arg.work_dir, 'runs-'+str(self.best_acc_epoch)+'-*'))[0]
-            weights = torch.load(weights_path)
-            if type(self.arg.device) is list:
-                if len(self.arg.device) > 1:
-                    weights = OrderedDict([['module.'+k, v.cuda(self.output_device)] for k, v in weights.items()])
-            self.model.load_state_dict(weights)
-
-            wf = weights_path.replace('.pt', '_wrong.txt')
-            rf = weights_path.replace('.pt', '_right.txt')
-            self.print_log('\n' + '='*60)
-            self.print_log('Final evaluation on best model (epoch {})'.format(self.best_acc_epoch))
-            self.print_log('='*60)
-            self.eval(epoch=0, save_score=True, loader_name=['test'], wrong_file=wf, result_file=rf)
-
             num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            pattern = os.path.join(self.arg.work_dir, 'runs-' + str(self.best_acc_epoch) + '*')
+            best_files = glob.glob(pattern)
+            if best_files:
+                weights_path = best_files[0]
+                map_loc = ('cuda:{}'.format(self.output_device)
+                           if self.use_cuda else 'cpu')
+                weights = torch.load(weights_path, map_location=map_loc,
+                                     weights_only=False)
+                if type(self.arg.device) is list and len(self.arg.device) > 1:
+                    weights = OrderedDict([
+                        ['module.' + k, v.to(self.output_device)]
+                        for k, v in weights.items()
+                    ])
+                self.model.load_state_dict(weights)
+
+                wf = weights_path.replace('.pt', '_wrong.txt')
+                rf = weights_path.replace('.pt', '_right.txt')
+                self.print_log('\n' + '='*60)
+                self.print_log('Final evaluation on best model (epoch {})'.format(self.best_acc_epoch))
+                self.print_log('='*60)
+                self.arg.print_log = False
+                self.eval(epoch=0, save_score=True, loader_name=['test'], wrong_file=wf, result_file=rf)
+                self.arg.print_log = True
+
             self.print_log('\n' + '='*60)
             self.print_log('Training complete. Summary:')
             self.print_log('  Best accuracy     : {:.2f}%'.format(self.best_acc * 100))
-            self.print_log('  Best epoch        : {}'.format(self.best_acc_epoch))
+            self.print_log('  Best acc epoch    : {}'.format(self.best_acc_epoch))
+            self.print_log('  Best F1           : {:.4f}'.format(self.best_f1))
+            self.print_log('  Best F1 epoch     : {}'.format(self.best_f1_epoch))
             self.print_log('  Model dir         : {}'.format(self.arg.work_dir))
             self.print_log('  Trainable params  : {:,}'.format(num_params))
             self.print_log('  Weight decay      : {}'.format(self.arg.weight_decay))
             self.print_log('  Base LR           : {}'.format(self.arg.base_lr))
             self.print_log('  Batch size        : {}'.format(self.arg.batch_size))
-            self.print_log('  Test batch size   : {}'.format(self.arg.test_batch_size))
-            self.print_log(f'seed: {self.arg.seed}')
+            self.print_log('  Seed              : {}'.format(self.arg.seed))
 
         elif self.arg.phase == 'test':
-            wf = self.arg.weights.replace('.pt', '_wrong.txt')
-            rf = self.arg.weights.replace('.pt', '_right.txt')
-
-            # mask = self.model.module.joint_label
-            #
-            # A = torch.tensor(self.model.module.graph.A).cuda(mask.device).float()
-            # A[A!=0] = 1
-            #
-            # ind = torch.argmax(mask, dim=0)
-            # print(ind)
-
-
             if self.arg.weights is None:
                 raise ValueError('Please appoint --weights.')
+            wf = self.arg.weights.replace('.pt', '_wrong.txt')
+            rf = self.arg.weights.replace('.pt', '_right.txt')
             self.arg.print_log = False
             self.print_log('Model:   {}.'.format(self.arg.model))
             self.print_log('Weights: {}.'.format(self.arg.weights))
@@ -830,18 +882,19 @@ class Processor():
 if __name__ == '__main__':
     parser = get_parser()
 
-    # load arg form config file
     p = parser.parse_args()
     if p.config is not None:
         with open(p.config, 'r') as f:
-            # default_arg = yaml.load(f)
             default_arg = yaml.safe_load(f)
-        key = vars(p).keys()
-        for k in default_arg.keys():
-            if k not in key:
-                print('WRONG ARG: {}'.format(k))
-                assert (k in key)
-        parser.set_defaults(**default_arg)
+        valid_keys = set(vars(p).keys())
+        normalized_arg = {}
+        for k, v in default_arg.items():
+            k_norm = k.replace('-', '_')
+            if k_norm not in valid_keys:
+                print('WRONG ARG (diabaikan): {}'.format(k))
+                continue
+            normalized_arg[k_norm] = v
+        parser.set_defaults(**normalized_arg)
 
     arg = parser.parse_args()
     init_seed(arg.seed)

@@ -33,6 +33,10 @@ model_args:
 weights: null
 ignore_weights: []
 
+# ── Loss ───────────────────────────────────────────────────────────────────────
+loss: CrossEntropyLoss
+loss_args: {}
+
 # ── Optimizer ──────────────────────────────────────────────────────────────────
 optimizer: SGD
 base_lr: 0.1
@@ -57,7 +61,7 @@ show_topk: [1]
 
 # ── Feeder ─────────────────────────────────────────────────────────────────────
 feeder: feeders.feeder_ntu.Feeder
-num_worker: 4
+num_worker: 2
 use_weighted_sampler: True
 
 train_feeder_args:
@@ -73,7 +77,7 @@ train_feeder_args:
   random_noise: False
   normalization: False
   debug: False
-  use_mmap: False
+  use_mmap: True
 
 test_feeder_args:
   data_path: /content/drive/MyDrive/Fall-Detection/dataset/dataset_yolo_25/val_data.npy
@@ -88,7 +92,7 @@ test_feeder_args:
   random_noise: False
   normalization: False
   debug: False
-  use_mmap: False
+  use_mmap: True
 
 alpha: False
 
