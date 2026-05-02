@@ -300,24 +300,19 @@ class TCN_GCN_unit(nn.Module):
         
         
 class TopoTrans(nn.Module):
-    def __init__(self, out_dim):
+    def __init__(self, out_dim, num_person=2):
         super(TopoTrans, self).__init__()
+        self.num_person = num_person
         self.relu = nn.ReLU()
-        self.mlp = nn.Linear(64,out_dim)
-        # self.tanh = nn.Tanh
-        # self.pa = nn.Parameter(torch.zeros(1), requires_grad=True)
+        self.mlp = nn.Linear(64, out_dim)
         self.bn = nn.BatchNorm1d(out_dim)
-        
+
     def forward(self, x):
-        # for ntu, two people at the same frame
-        x = x.repeat(2,1)
-        # for ucla, one person only
-        #x = x
+        # repeat N → N*M agar sesuai dengan dimensi batch setelah view N*M
+        x = x.repeat(self.num_person, 1)
         x = self.mlp(x)
-        #BN
         x = self.bn(x)
         x = self.relu(x)
-        
         return x.unsqueeze(2).unsqueeze(3)
 
 
@@ -378,16 +373,16 @@ class Model(nn.Module):
         self.l8 = TCN_GCN_unit(256, 256, A, stride=2, adaptive=adaptive, alpha=alpha)
         self.l9 = TCN_GCN_unit(256, 256, A, adaptive=adaptive, alpha=alpha)
         self.l10 = TCN_GCN_unit(256, 256, A, adaptive=adaptive, alpha=alpha)
-        self.t0 = TopoTrans(out_dim=128)
-        self.t1 = TopoTrans(out_dim=128)
-        self.t2 = TopoTrans(out_dim=128)
-        self.t3 = TopoTrans(out_dim=128)
-        self.t4 = TopoTrans(out_dim=128)
-        self.t5 = TopoTrans(out_dim=256)
-        self.t6 = TopoTrans(out_dim=256)
-        self.t7 = TopoTrans(out_dim=256)
-        self.t8 = TopoTrans(out_dim=256)
-        self.t9 = TopoTrans(out_dim=256)
+        self.t0 = TopoTrans(out_dim=128, num_person=num_person)
+        self.t1 = TopoTrans(out_dim=128, num_person=num_person)
+        self.t2 = TopoTrans(out_dim=128, num_person=num_person)
+        self.t3 = TopoTrans(out_dim=128, num_person=num_person)
+        self.t4 = TopoTrans(out_dim=128, num_person=num_person)
+        self.t5 = TopoTrans(out_dim=256, num_person=num_person)
+        self.t6 = TopoTrans(out_dim=256, num_person=num_person)
+        self.t7 = TopoTrans(out_dim=256, num_person=num_person)
+        self.t8 = TopoTrans(out_dim=256, num_person=num_person)
+        self.t9 = TopoTrans(out_dim=256, num_person=num_person)
         self.topo = Topo()
         
         self.fc = nn.Linear(256, num_class)
