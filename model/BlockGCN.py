@@ -309,35 +309,37 @@ class Topo(nn.Module):
         N_batch = x.shape[0]
         device  = x.device
 
-        # VietorisRipsComplex harus jalan di CPU
-        x = x.cpu()
+        # Seluruh komputasi topologi di luar gradient graph:
+        # - VR bukan operasi differentiable
+        # - self.pl di CPU (torch_topological API requirement)
+        # - TopoTrans (downstream) tetap trainable
+        with torch.no_grad():
+            xc = x.float().cpu()
+            xc = xc.mean(1)                            # (N, C, T, V)
+            xc = xc.unsqueeze(-1) - xc.unsqueeze(-2)  # (N, C, T, V, V)
+            xc = xc.mean(-3)                           # (N, C, V, V)
+            xc = self.L2_norm(xc)                      # (N, V, V)
 
-        x = x.mean(1)                           # (N, C, T, V)
-        x = x.unsqueeze(-1) - x.unsqueeze(-2)   # (N, C, T, V, V)
-        x = x.mean(-3)                          # (N, C, V, V)
-        x = self.L2_norm(x)                     # (N, V, V)
+            x_min = xc.min()
+            x_max = xc.max()
+            if x_max - x_min > 1e-8:
+                xc = (xc - x_min) / (x_max - x_min)
+            else:
+                return torch.zeros(N_batch, 64, dtype=torch.float32, device=device)
 
-        x_min = x.min()
-        x_max = x.max()
-        if x_max - x_min > 1e-8:
-            x = (x - x_min) / (x_max - x_min)
-        else:
-            # Data hampir nol (batch zero-padded) → fallback zeros
-            return torch.zeros(N_batch, 64, device=device)
+            try:
+                self.pl = self.pl.cpu()
+                xc = self.vr(xc)
+                xc = make_tensor(xc)
+                out = self.pl(xc)
+            except Exception:
+                return torch.zeros(N_batch, 64, dtype=torch.float32, device=device)
 
-        try:
-            x    = self.vr(x)
-            x    = make_tensor(x)
-            self.pl = self.pl.cpu()
-            x    = self.pl(x)
-        except (ValueError, RuntimeError):
-            # Persistence diagram kosong → fallback zeros
-            return torch.zeros(N_batch, 64, device=device)
+        if out.dim() == 1:
+            out = out.unsqueeze(0)
 
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
-
-        return x.to(device)   # (N, 64) dikembalikan ke device asli
+        out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).float()
+        return out.to(device)   # (N, 64) — no grad, dipakai sebagai fixed feature oleh TopoTrans
 
 
 # ── Model Utama ───────────────────────────────────────────────────────────────

@@ -516,7 +516,7 @@ class Processor():
 
         # mix_precision is slower for this model!!!
         use_amp = True
-        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        scaler = torch.cuda.amp.GradScaler(init_scale=256, enabled=use_amp)
 
         num_class = (self.model.module.num_class
                      if hasattr(self.model, "module") else self.model.num_class)
@@ -535,6 +535,8 @@ class Processor():
             # backward
             self.optimizer.zero_grad()
             scaler.scale(loss).backward()
+            scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=20.0)
             scaler.step(self.optimizer)
             scaler.update()
 
