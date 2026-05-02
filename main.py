@@ -287,6 +287,11 @@ def get_parser():
         default=0.1,
         help='decay rate for learning rate')
     parser.add_argument('--warm_up_epoch', type=int, default=0)
+    parser.add_argument(
+        '--use_weighted_sampler',
+        type=str2bool,
+        default=False,
+        help='gunakan WeightedRandomSampler untuk menangani class imbalance')
 
     return parser
 
@@ -349,10 +354,15 @@ class Processor():
         Feeder = import_class(self.arg.feeder)
         self.data_loader = dict()
         if self.arg.phase == 'train':
+            train_dataset = Feeder(**self.arg.train_feeder_args)
+            use_weighted  = getattr(self.arg, 'use_weighted_sampler', False)
+            sampler       = (train_dataset.get_weighted_sampler()
+                             if use_weighted else None)
             self.data_loader['train'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.train_feeder_args),
+                dataset=train_dataset,
                 batch_size=self.arg.batch_size,
-                shuffle=True,
+                shuffle=(sampler is None),
+                sampler=sampler,
                 pin_memory=True,
                 num_workers=self.arg.num_worker,
                 drop_last=True,
@@ -373,10 +383,7 @@ class Processor():
         print(Model)
         self.model = Model(**self.arg.model_args)
         print(self.model)
-        # Weight [1.0, 4.0]: kompensasi imbalance 4:1 (not_fall:fall).
-        # Fall diberi penalti 4x lebih besar agar recall meningkat.
-        class_weights = torch.tensor([1.0, 4.0]).float().cuda(output_device)
-        self.loss = nn.CrossEntropyLoss(weight=class_weights)
+        self.loss = nn.CrossEntropyLoss()
 
         if self.arg.weights:
             self.global_step = int(self.arg.weights[:-3].split('-')[-1])
@@ -514,7 +521,7 @@ class Processor():
         num_class = (self.model.module.num_class
                      if hasattr(self.model, "module") else self.model.num_class)
 
-        for batch_idx, (joint, data, label, index) in enumerate(process):
+        for batch_idx, (data, label) in enumerate(process):
             self.global_step += 1
             with torch.no_grad():
                 data = data.float().cuda(self.output_device)
@@ -522,18 +529,12 @@ class Processor():
             timer['dataloader'] += self.split_time()
 
             with torch.cuda.amp.autocast(enabled=use_amp):
-                output, z = self.model(
-                    data,
-                    F.one_hot(label, num_classes=num_class),
-                    joint
-                )
+                output = self.model(data)
                 loss = self.loss(output, label)
 
             # backward
             self.optimizer.zero_grad()
             scaler.scale(loss).backward()
-            scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             scaler.step(self.optimizer)
             scaler.update()
 
@@ -588,7 +589,7 @@ class Processor():
             num_class = (self.model.module.num_class
                          if hasattr(self.model, "module") else self.model.num_class)
             process = tqdm(self.data_loader[ln], ncols=40)
-            for batch_idx, (joint, data, label, index) in enumerate(process):
+            for batch_idx, (data, label) in enumerate(process):
                 label_list.append(label)
                 if self.arg.ema:
                     label_list_ema.append(label)
@@ -596,19 +597,11 @@ class Processor():
                     data = data.float().cuda(self.output_device)
                     label = label.long().cuda(self.output_device)
 
-                    output, y = self.model(
-                        data,
-                        F.one_hot(label, num_classes=num_class),
-                        joint
-                    )
-
-
+                    output = self.model(data)
 
                     if self.arg.ema:
                         self.model_ema.cuda(self.output_device)
-                        output_ema, z_ema = self.model_ema(data, F.one_hot(label, num_classes=self.model.module.num_class))
-                        # output_ema, z_ema = self.model_ema(data,
-                        #                                    F.one_hot(label, num_classes=self.model.num_class))
+                        output_ema = self.model_ema(data)
                     loss = self.loss(output, label)
                     if self.arg.ema:
                         loss_ema = self.loss(output_ema, label)

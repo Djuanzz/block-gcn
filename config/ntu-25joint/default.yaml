@@ -1,0 +1,98 @@
+# config/ntu-25joint/default.yaml
+# Fall Detection — BlockGCN — NTU RGB+D 25 joint
+# Metodologi identik dengan Proyek B (Fall-Detection/config/fall-detection/balanced.yaml)
+# Satu-satunya perbedaan: num_point=25, graph NTU, data dari skeleton Kinect 3D
+#
+# Cara pakai:
+#   Train : python main.py --config config/ntu-25joint/default.yaml
+#   Test  : python main.py --config config/ntu-25joint/default.yaml
+#             --phase test --weights work_dir/ntu_fall_25joint/runs-XX-XXXX.pt
+#
+# Persiapkan dataset terlebih dahulu:
+#   python data/ntu/prepare_dataset_ntu_v2.py \
+#       --input data/ntu/NTU60_CS_binary_fall.npz \
+#       --output data/ntu
+
+work_dir: work_dir/ntu_fall_25joint
+phase: train
+seed: 42
+print_log: True
+save_score: True
+
+device: [0]
+
+# ── Model ──────────────────────────────────────────────────────────────────────
+model: model.BlockGCN.Model
+model_args:
+  num_class: 2
+  num_point: 25          # NTU 25-joint (vs 17 untuk YOLO)
+  num_person: 1          # single person (ambil orang terbaik di prepare_dataset)
+  graph: graph.ntu_rgb_d.Graph
+  graph_args:
+    labeling_mode: spatial
+  in_channels: 3         # x, y, z (3D Kinect — sama jumlah channel dengan YOLO x,y,conf)
+  drop_out: 0.3
+  adaptive: True
+  alpha: False
+
+weights: null
+ignore_weights: []
+
+# ── Optimizer (identik Proyek B) ───────────────────────────────────────────────
+optimizer: SGD
+base_lr: 0.1
+momentum: 0.9
+nesterov: True
+weight_decay: 0.0004
+lr_decay_rate: 0.1
+step: [50, 70]
+warm_up_epoch: 5
+
+# ── Training (identik Proyek B) ────────────────────────────────────────────────
+num_epoch: 90
+start_epoch: 0
+batch_size: 16
+test_batch_size: 16
+
+log_interval: 20
+save_interval: 1
+save_epoch: 30
+eval_interval: 1
+show_topk: [1]
+
+# ── Feeder ─────────────────────────────────────────────────────────────────────
+feeder: feeders.feeder_ntu.Feeder
+num_worker: 0
+use_weighted_sampler: True   # NTU ~4:1 imbalance (A008/009/027/042 vs A043)
+
+train_feeder_args:
+  data_path: data/ntu/train_data.npy
+  label_path: data/ntu/train_label.pkl
+  split: train
+  window_size: 150
+  p_interval: [0.5, 1.0]
+  random_move: True
+  random_shift: True
+  random_flip: True
+  random_speed: True
+  random_noise: False    # NTU 3D tidak memerlukan noise koordinat
+  normalization: False
+  debug: False
+  use_mmap: False
+
+test_feeder_args:
+  data_path: data/ntu/val_data.npy
+  label_path: data/ntu/val_label.pkl
+  split: val
+  window_size: 150
+  p_interval: [1.0, 1.0]
+  random_move: False
+  random_shift: False
+  random_flip: False
+  random_speed: False
+  random_noise: False
+  normalization: False
+  debug: False
+  use_mmap: False
+
+alpha: False
