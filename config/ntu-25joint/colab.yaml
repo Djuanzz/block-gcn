@@ -6,7 +6,7 @@
 #   !python main.py --config config/ntu-25joint/colab.yaml
 #
 # Pastikan dataset sudah disiapkan dengan prepare_dataset_ntu_v2.py
-# dan di-upload ke: MyDrive/Fall-Detection/dataset_yolo_25/
+# dan di-upload ke: MyDrive/Fall-Detection/dataset/dataset_yolo_25/
 
 work_dir: /content/drive/MyDrive/Fall-Detection/work_dir/ntu_fall_25joint
 phase: train
@@ -61,8 +61,8 @@ num_worker: 4
 use_weighted_sampler: True
 
 train_feeder_args:
-  data_path: /content/drive/MyDrive/Fall-Detection/dataset_yolo_25/train_data.npy
-  label_path: /content/drive/MyDrive/Fall-Detection/dataset_yolo_25/train_label.pkl
+  data_path: /content/drive/MyDrive/Fall-Detection/dataset/dataset_yolo_25/train_data.npy
+  label_path: /content/drive/MyDrive/Fall-Detection/dataset/dataset_yolo_25/train_label.pkl
   split: train
   window_size: 150
   p_interval: [0.5, 1.0]
@@ -76,8 +76,8 @@ train_feeder_args:
   use_mmap: False
 
 test_feeder_args:
-  data_path: /content/drive/MyDrive/Fall-Detection/dataset_yolo_25/val_data.npy
-  label_path: /content/drive/MyDrive/Fall-Detection/dataset_yolo_25/val_label.pkl
+  data_path: /content/drive/MyDrive/Fall-Detection/dataset/dataset_yolo_25/val_data.npy
+  label_path: /content/drive/MyDrive/Fall-Detection/dataset/dataset_yolo_25/val_label.pkl
   split: val
   window_size: 150
   p_interval: [1.0, 1.0]
@@ -91,3 +91,4 @@ test_feeder_args:
   use_mmap: False
 
 alpha: False
+
