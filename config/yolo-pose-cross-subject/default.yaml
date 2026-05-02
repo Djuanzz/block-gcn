@@ -1,0 +1,60 @@
+work_dir: ./work_dir/yolo_fall_cross_subject
+
+# feeder
+feeder: feeders.feeder_yolo.Feeder
+train_feeder_args:
+  data_path: data/ntu_yolo/NTU60_YOLO_CS_binary_fall.npz
+  split: train
+  debug: False
+  random_choose: False
+  random_shift: False
+  random_move: True
+  window_size: 64
+  normalization: False
+  random_rot: False          # YOLO data 2D — jangan aktifkan random_rot
+  p_interval: [0.5, 1.0]
+  vel: False
+  bone: False
+
+test_feeder_args:
+  data_path: data/ntu_yolo/NTU60_YOLO_CS_binary_fall.npz
+  split: test
+  window_size: 64
+  p_interval: [1.0, 1.0]
+  vel: False
+  bone: False
+  debug: False
+
+# model
+model: model.BlockGCN.Model
+model_args:
+  num_class: 2
+  num_point: 17              # COCO 17-joint (ganti dari 25)
+  num_person: 1              # M=1, single person (ganti dari 2)
+  graph: graph.coco_yolo.Graph
+  window_size: 64
+  graph_args:
+    labeling_mode: "spatial"
+  joint_label:
+    # 0:nose  1:leye  2:reye  3:lear  4:rear  → kepala (0)
+    # 5:lsho  6:rsho  11:lhip  12:rhip         → tubuh atas/bawah (1)
+    # 7:lelbow  8:relbow  9:lwrist  10:rwrist   → lengan (2)
+    # 13:lknee  14:rknee  15:lankle  16:rankle  → kaki (3)
+    [0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 1, 1, 3, 3, 3, 3]
+
+# optim — identik dengan default.yaml asli untuk perbandingan apple-to-apple
+weight_decay: 0.0004
+base_lr: 0.01
+lr_decay_rate: 0.1
+step: [40, 60]
+warm_up_epoch: 5
+
+# training — identik dengan default.yaml asli
+device: [0]
+num_worker: 4              # Windows: turunkan jika ada error multiprocessing
+batch_size: 8
+test_batch_size: 8
+num_epoch: 80
+nesterov: True
+save_epoch: 0
+show_topk: [1]

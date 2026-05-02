@@ -1,0 +1,56 @@
+work_dir: ./work_dir/yolo_fall_cross_subject_vel
+
+# feeder
+feeder: feeders.feeder_yolo.Feeder
+train_feeder_args:
+  data_path: data/ntu_yolo/NTU60_YOLO_CS_binary_fall.npz
+  split: train
+  debug: False
+  random_choose: False
+  random_shift: False
+  random_move: True
+  window_size: 64
+  normalization: False
+  random_rot: False
+  p_interval: [0.5, 1.0]
+  vel: True                  # ← velocity modality aktif
+  bone: False
+
+test_feeder_args:
+  data_path: data/ntu_yolo/NTU60_YOLO_CS_binary_fall.npz
+  split: test
+  window_size: 64
+  p_interval: [1.0, 1.0]
+  vel: True
+  bone: False
+  debug: False
+
+# model
+model: model.BlockGCN.Model
+model_args:
+  num_class: 2
+  num_point: 17
+  num_person: 1
+  graph: graph.coco_yolo.Graph
+  window_size: 64
+  graph_args:
+    labeling_mode: "spatial"
+  joint_label:
+    [0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 1, 1, 3, 3, 3, 3]
+
+# optim
+weight_decay: 0.0004
+base_lr: 0.01
+lr_decay_rate: 0.1
+step: [40, 60]
+warm_up_epoch: 5
+
+# training
+device: [0]
+num_worker: 4
+batch_size: 8
+test_batch_size: 8
+num_epoch: 80
+nesterov: True
+save_epoch: 0
+show_topk: [1]
