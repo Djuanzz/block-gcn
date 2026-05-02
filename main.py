@@ -373,7 +373,10 @@ class Processor():
         print(Model)
         self.model = Model(**self.arg.model_args)
         print(self.model)
-        self.loss = nn.CrossEntropyLoss().cuda(output_device)
+        # Weight [1.0, 4.0]: kompensasi imbalance 4:1 (not_fall:fall).
+        # Fall diberi penalti 4x lebih besar agar recall meningkat.
+        class_weights = torch.tensor([1.0, 4.0]).float().cuda(output_device)
+        self.loss = nn.CrossEntropyLoss(weight=class_weights)
 
         if self.arg.weights:
             self.global_step = int(self.arg.weights[:-3].split('-')[-1])
