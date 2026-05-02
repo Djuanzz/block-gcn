@@ -306,27 +306,38 @@ class Topo(nn.Module):
 
     def forward(self, x):
         # x: (N, M, C, T, V)
-        x = x.mean(1)                           # (N, C, T, V) — rata-rata orang
-        x = x.unsqueeze(-1) - x.unsqueeze(-2)   # (N, C, T, V, V) — pairwise diff
+        N_batch = x.shape[0]
+        device  = x.device
+
+        # VietorisRipsComplex harus jalan di CPU
+        x = x.cpu()
+
+        x = x.mean(1)                           # (N, C, T, V)
+        x = x.unsqueeze(-1) - x.unsqueeze(-2)   # (N, C, T, V, V)
         x = x.mean(-3)                          # (N, C, V, V)
-        x = self.L2_norm(x)                     # (N, V, V) — L2 norm antar joint
+        x = self.L2_norm(x)                     # (N, V, V)
 
         x_min = x.min()
         x_max = x.max()
         if x_max - x_min > 1e-8:
             x = (x - x_min) / (x_max - x_min)
         else:
-            x = torch.zeros_like(x)
+            # Data hampir nol (batch zero-padded) → fallback zeros
+            return torch.zeros(N_batch, 64, device=device)
 
-        x = self.vr(x)
-        x = make_tensor(x)
-        x = self.pl(x)
+        try:
+            x    = self.vr(x)
+            x    = make_tensor(x)
+            self.pl = self.pl.cpu()
+            x    = self.pl(x)
+        except (ValueError, RuntimeError):
+            # Persistence diagram kosong → fallback zeros
+            return torch.zeros(N_batch, 64, device=device)
 
-        # Guard: pastikan selalu (N, 64) bukan (64,) saat single sample
         if x.dim() == 1:
             x = x.unsqueeze(0)
 
-        return x   # (N, 64)
+        return x.to(device)   # (N, 64) dikembalikan ke device asli
 
 
 # ── Model Utama ───────────────────────────────────────────────────────────────
