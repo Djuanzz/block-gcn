@@ -15,6 +15,8 @@ work_dir
 *.pt
 assets
 notebooks
+results
+weights
 
 # =====
 
